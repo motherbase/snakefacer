@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<title>The Real Snake</title>
+		<meta charset="utf-8">
+		<style>
+			@import url(https://fonts.googleapis.com/css?family=Lato:300italic,700italic,300,700);
+
+			body {
+				font-family: 'Lato';
+				background-color: #f0f0f0;
+				margin: 0px auto;
+				max-width: 1150px;
+			}
+
+			#overlay, #webgl {
+				position: absolute;
+				top: 0px;
+				left: 0px;
+				-o-transform : scaleX(-1);
+				-webkit-transform : scaleX(-1);
+				transform : scaleX(-1);
+				-ms-filter : fliph; /*IE*/
+				filter : fliph; /*IE*/
+
+				width : 500px;
+				height : 375px;
+			}
+
+			#videoel {
+				-o-transform : scaleX(-1);
+				-webkit-transform : scaleX(-1);
+				transform : scaleX(-1);
+				-ms-filter : fliph; /*IE*/
+				filter : fliph; /*IE*/
+
+				width : 500px;
+				height : 375px;
+			}
+
+			#container {
+				position : relative;
+				/*width : 600px;*/
+			}
+
+			#content {
+				margin-top : 50px;
+				margin-left : auto;
+				margin-right : auto;
+				max-width: 500px;
+			}
+
+			#sketch {
+				display: none;
+			}
+
+			h2 {
+				font-weight : 400;
+				text-transform: uppercase;
+			}
+
+			.masks {
+				display: none;
+			}
+
+			.btn {
+				font-family: 'Lato';
+				font-size: 16px;
+			}
+
+			#webgl2 {
+				display : none;
+			}
+
+			#controls {
+				text-align : center;
+			}
+		</style>
+		<script type="text/javascript">
+
+			var _gaq = _gaq || [];
+			_gaq.push(['_setAccount', 'UA-32642923-1']);
+			_gaq.push(['_trackPageview']);
+
+			(function() {
+				var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+				ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+				var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+			})();
+
+		</script>
+	</head>
+	<body>
+		<script src="./js/dat.gui.min.js"></script>
+		<script src="./js/utils.js"></script>
+		<script src="./js/clmtrackr.min.js"></script>
+		<script src="./models/model_pca_20_svm.js"></script>
+		<script src="./js/Stats.js"></script>
+		<script src="./js/face_deformer.js"></script>
+		<script src="./js/jquery.min.js"></script>
+		<script src="./js/poisson_new.js"></script>
+
+		<div id="content">
+			<h2>Who is the real Snake?</h2>
+			<div id="container">
+				<video id="videoel" width="500" height="375" preload="auto"></video>
+				<canvas id="overlay" width="500" height="375"></canvas>
+				<canvas id="webgl" width="500" height="375"></canvas>
+			</div>
+			<br/>
+			<div id="controls">
+				<input class="btn" type="button" value="wait, loading video & images" disabled="disabled" onclick="startVideo()" id="startbutton"></input>
+				<select name="mask" id="selectmask" style="display: none;">
+					<option value="0">Snake</option>
+					<option value="1">Quiet</option>
+				</select>
+			</div>
+			<canvas id="webgl2" width="400" height="300"></canvas>
+			<img id="snake" class="masks" src="./media/snake.png">
+			<!--img id="quiet" class="masks" src="./media/quiet.jpg"-->
+
+			<script>
+				// when everything is ready, automatically start everything ?
+
+				var vid = document.getElementById('videoel');
+				var overlay = document.getElementById('overlay');
+				var overlayCC = overlay.getContext('2d');
+
+				/*********** Setup of video/webcam and checking for webGL support *********/
+
+				var videoReady = false;
+				var imagesReady = false;
+
+				function enablestart() {
+					if (videoReady && imagesReady) {
+						var startbutton = document.getElementById('startbutton');
+						startbutton.value = "Start";
+						startbutton.disabled = null;
+					}
+				}
+
+				$(window).load(function() {
+    				imagesReady = true;
+    				enablestart();
+				});
+
+				var insertAltVideo = function(video) {
+					if (supports_video()) {
+						if (supports_ogg_theora_video()) {
+							video.src = "./media/cap13_edit2.ogv";
+						} else if (supports_h264_baseline_video()) {
+							video.src = "./media/cap13_edit2.mp4";
+						} else {
+							return false;
+						}
+						//video.play();
+						return true;
+					} else return false;
+				}
+
+				// check whether browser supports webGL
+				var webGLContext;
+				var webGLTestCanvas = document.createElement('canvas');
+				if (window.WebGLRenderingContext) {
+					webGLContext = webGLTestCanvas.getContext('webgl') || webGLTestCanvas.getContext('experimental-webgl');
+					if (!webGLContext || !webGLContext.getExtension('OES_texture_float')) {
+						webGLContext = null;
+					}
+				}
+				if (webGLContext == null) {
+					alert("Your browser does not seem to support WebGL. Unfortunately this face mask example depends on WebGL, so you'll have to try it in another browser. :(");
+				}
+
+				navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+				window.URL = window.URL || window.webkitURL || window.msURL || window.mozURL;
+
+				// check for camerasupport
+				if (navigator.getUserMedia) {
+					// set up stream
+
+					// chrome 19 shim
+					var videoSelector = {video : true};
+					if (window.navigator.appVersion.match(/Chrome\/(.*?) /)) {
+						var chromeVersion = parseInt(window.navigator.appVersion.match(/Chrome\/(\d+)\./)[1], 10);
+						if (chromeVersion < 20) {
+							videoSelector = "video";
+						}
+					};
+
+					navigator.getUserMedia(videoSelector, function( stream ) {
+						if (vid.mozCaptureStream) {
+							vid.mozSrcObject = stream;
+						} else {
+							vid.src = (window.URL && window.URL.createObjectURL(stream)) || stream;
+						}
+						vid.play();
+					}, function() {
+						insertAltVideo(vid);
+						alert("There was some problem trying to fetch video from your webcam, using a fallback video instead.");
+					});
+				} else {
+					insertAltVideo(vid);
+					alert("Your browser does not seem to support getUserMedia, using a fallback video instead.");
+				}
+
+				vid.addEventListener('canplay', function() {videoReady = true;enablestart();}, false);
+
+				/*********** Code for face substitution *********/
+
+				var animationRequest;
+				var positions;
+
+				var ctrack = new clm.tracker();
+				ctrack.init(pModel);
+
+				document.getElementById('selectmask').addEventListener('change', updateMask, false);
+
+				function updateMask(el) {
+					currentMask = parseInt(el.target.value, 10);
+					var positions = ctrack.getCurrentPosition(vid);
+					if (positions) {
+						switchMasks(positions);
+					}
+				}
+
+				function startVideo() {
+					// start video
+					vid.play();
+					// start tracking
+					ctrack.start(vid);
+					// start drawing face grid
+					drawGridLoop();
+				}
+
+				var fd = new faceDeformer();
+				fd.init(document.getElementById('webgl'));
+				var wc1 = document.getElementById('webgl').getContext('webgl') || document.getElementById('webgl').getContext('experimental-webgl')
+				wc1.clearColor(0,0,0,0);
+
+				var fd2 = new faceDeformer();
+				fd2.init(document.getElementById('webgl2'));
+				var wc2 = document.getElementById('webgl2').getContext('webgl') || document.getElementById('webgl2').getContext('experimental-webgl')
+				wc2.clearColor(0,0,0,0);
+
+				var masks = {
+					"snake": [[147.813758824088, 269.82633648643144], [156.32881480827106, 354.83911572400706], [168.42561181671138, 443.4508415407363], [187.06092540096438, 512.9255972291494], [216.5396721062896, 567.6431027076835], [253.33008226075117, 617.021448501906], [297.12054710291955, 645.7467377961793], [359.049009752916, 657], [430.43847534226165, 638.3017283047443], [483.4192649217225, 598.4630746351123], [513.1925943089624, 551.5813646736206], [538.2619005145689, 482.2285673645815], [534.673217248559, 420.83258802147105], [534.2229338345741, 346.0139739648455], [529.8717977246359, 255.38326158892232], [504.05927399760085, 251.69120911919305], [468.00281331444387, 240.19516980657522], [415.73253273128483, 247.5098045086783], [379.6893623753676, 260.7676018696003], [188.2218049300782, 286.0340606336545], [212.40537235198238, 272.5000194522056], [256.31624886607904, 268.87900259818565], [291.7612222513983, 273.1626812045981], [219.42624363985377, 315.04725877124287], [249.43994172633876, 291.68483775181255], [289.06696275139814, 305.59370925058556], [253.19177038127467, 317.55222668166834], [250.2748737835573, 303.540902995979], [465.87045416976093, 279.24093083936486], [430.96503742243715, 267.4777338845352], [389.4400782095794, 290.3619293238175], [441.2776317660558, 292.66088581183794], [426.71910302539345, 276.4158738825467], [336.86817972311525, 291.03414094580444], [303.11373510957924, 370.8236277763637], [283.7105737814002, 395.3226006607867], [292.3435965427836, 421.5449690121304], [340.64526788419573, 422.84165543373507], [393.6478889606054, 414.8298962396001], [402.3737576358781, 389.9588134955075], [388.4233369003381, 357.4421472136494], [337.2327263039632, 345.09557774251124], [310.1541438057115, 404.39405066115876], [375.96184099734853, 406.98013707347087], [270.5815867262612, 495.41617523886475], [301.45330085186254, 483.4417641593147], [328.5747268132448, 467.35590585032355], [351.0955675855233, 474.3848209771638], [373.6333234226805, 466.1487494809873], [411.61762823284886, 472.98080682595725], [430.5992583532665, 485.1940456681085], [413.97451337991015, 504.276100340536], [389.5795956742005, 512.882154679937], [347.81597251887536, 518.9824118118158], [314.7823111706028, 521.4209601188484], [293.35706750776905, 514.0114790802322], [328.5775943326813, 494.36798074799833], [362.37479853358406, 489.67681953350177], [403.00910911681274, 485.25337568898135], [400.4635852376655, 483.33146102659845], [361.3484871202499, 489.2303330077256], [328.10394381400914, 492.30922075751727], [337.802672982552, 397.61473535646684], [230.39909321195643, 299.8669700300091], [271.90572802994006, 294.22710832685783], [271.58581584004117, 311.9424017939223], [235.18448669292763, 317.56335759865635], [453.447118376209, 270.25305156731196], [410.21483274282303, 275.8863174363957], [416.5160833903338, 291.2501834447298],
+						[452.9711248903521, 285.80898019431186]],
+					"quiet": [[90.39386205757759, 377.151950771712], [102.2965043224389, 451.78297566851427], [120.50176865284998, 511.49535653999567], [139.60610425077, 572.1008733784508], [167.17175725138992, 611.895271559129], [211.91953361124104, 658.371296335398], [243.5861221706008, 682], [291.661643501128, 691], [328.2828980146867, 684], [363.04284973257217, 658.831465460005], [401.26698287562186, 627.7643361524374], [433.63875114841454, 574.3318197980606], [460.6223689522732, 499.3244282613595], [475.47936257894025, 420.8553805456501], [478.5771336473893, 349.4800506070834], [428.45521363635606, 318.5089756385688], [392.8005968019835, 313.2845836991506], [349.5666021136634, 321.74854170301984], [313.7635804595708, 330.08749976224846], [123.67192432430355, 327.7813363665706], [149.29319713966623, 316.4630180477536], [193.44426120678813, 323.1562742505748], [227.770412207313, 329.0838818237], [153.09549020015163, 370.84653438369304], [188.1662850355886, 350.87269800982546], [227.93027493787523, 370.7599371347049], [188.94764613206002, 379.30999902799897], [194.4864006449514, 360.38635859857095], [408.1298829422832, 362.3509993954866], [369.0064710007921, 345.17182197341947], [331.43611737702315, 368.4565539747233], [371.6860847598941, 373.6103172728397], [372.42400988852926, 358.6891357775398], [274.66282828781357, 361.78698127688364], [244.25502168816075, 449.20169085030864], [235.25231903325135, 481.8725733201114], [247.01542458182684, 501.0715272191994], [282.46819440412156, 508.20827029527914], [322.33151664130054, 499.2526414734133], [331.65959881838614, 477.3676314067185], [320.126208457405, 448.02645899141214], [274.2540832860095, 420.1267714962496], [258.7999589289969, 486.346050171904], [309.2033358687853, 487.79468449345944], [211.23200165354694, 573.6562711707606], [232.36391182245362, 555.3335614020127], [262.33106211271496, 548.4627249519734], [284.2563086914507, 551.676007559624], [306.713831159767, 547.4536322271454], [339.8443137386637, 552.8626163516492], [359.1153143240738, 571.1408540222387], [340.61679998339923, 592.4709308037983], [315.7943151252827, 602.3483068214266], [280.37146815884637, 610.4092836002821], [253.5632105587506, 604.2748639668498], [230.27941748944394, 592.2829608775173], [245.64483333826715, 567.3625536325147], [285.37392993779224, 567.9086188457909], [325.0930736475644, 565.2122980175023], [325.85563507104416, 560.492768483542], [284.78731872968746, 563.2266126734295], [245.67070668291126, 562.6498903004622], [275.4855245672316, 475.88065264279373], [167.08314054758858, 356.7667039543407], [211.41135372993915, 356.0228245819872], [209.07996932755657, 376.1943435158481], [168.95367830528545, 376.84260015528037], [391.66664646923005, 349.28332478815224], [346.3164351017879, 352.36050777121795], [350.9865788567771, 371.8016900618587], [391.7493308032435, 369.8113842734718]]
+				};
+				var images = ["snake", "quiet"];
+				var currentMask = 0;
+
+				// canvas for copying the warped face to
+				var newcanvas = document.createElement('CANVAS');
+				newcanvas.width = vid.width;
+				newcanvas.height = vid.height;
+				// canvas for copying videoframes to
+				var videocanvas = document.createElement('CANVAS');
+				videocanvas.width = vid.width;
+				videocanvas.height = vid.height;
+				// canvas for masking
+				var maskcanvas = document.createElement('CANVAS');
+				maskcanvas.width = vid.width;
+				maskcanvas.height = vid.height;
+				// create canvases for all the faces
+				var imageCanvases = {};
+				for (var i = 0;i < images.length;i++) {
+					$("#"+images[i]).load(function(obj) {
+						var elementId = obj.target.id;
+
+						// copy the images to canvases
+						imagecanvas = document.createElement('CANVAS');
+						imagecanvas.width = obj.target.width;
+						imagecanvas.height = obj.target.height;
+						imagecanvas.getContext('2d').drawImage(obj.target,0,0);
+						imageCanvases[elementId] = imagecanvas;
+					});
+				}
+
+				var extended_vertices = [
+				  [0,71,72,0],
+				  [0,72,1,0],
+				  [1,72,73,1],
+				  [1,73,2,1],
+				  [2,73,74,2],
+				  [2,74,3,2],
+				  [3,74,75,3],
+				  [3,75,4,3],
+				  [4,75,76,4],
+				  [4,76,5,4],
+				  [5,76,77,5],
+				  [5,77,6,5],
+				  [6,77,78,6],
+				  [6,78,7,6],
+				  [7,78,79,7],
+				  [7,79,8,7],
+				  [8,79,80,8],
+				  [8,80,9,8],
+				  [9,80,81,9],
+				  [9,81,10,9],
+				  [10,81,82,10],
+				  [10,82,11,10],
+				  [11,82,83,11],
+				  [11,83,12,11],
+				  [12,83,84,12],
+				  [12,84,13,12],
+				  [13,84,85,13],
+				  [13,85,14,13],
+				  [14,85,86,14],
+				  [14,86,15,14],
+				  [15,86,87,15],
+				  [15,87,16,15],
+				  [16,87,88,16],
+				  [16,88,17,16],
+				  [17,88,89,17],
+				  [17,89,18,17],
+				  [18,89,90,18],
+				  [18,90,22,18],
+				  [22,90,21,22],
+				  [21,90,91,21],
+				  [21,20,91,21],
+				  [20,91,92,20],
+				  [20,92,19,20],
+				  [19,92,93,19],
+				  [19,93,71,19],
+				  [19,0,71,19],
+				  [44,61,56,44],
+				  [60,61,56,60],
+				  [60,56,57,60],
+				  [60,59,57,60],
+				  [58,59,57,58],
+				  [58,59,50,58]
+				];
+
+				function drawGridLoop() {
+					// get position of face
+					positions = ctrack.getCurrentPosition(vid);
+
+					overlayCC.clearRect(0, 0, 500, 375);
+					if (positions) {
+						// draw current grid
+						ctrack.draw(overlay);
+					}
+					// check whether mask has converged
+					var pn = ctrack.getConvergence();
+					if (pn < 0.4) {
+						switchMasks(positions);
+					} else {
+						requestAnimFrame(drawGridLoop);
+					}
+				}
+
+				function switchMasks(pos) {
+					videocanvas.getContext('2d').drawImage(vid,0,0,videocanvas.width,videocanvas.height);
+
+					// we need to extend the positions with new estimated points in order to get pixels immediately outside mask
+					var newMaskPos = masks[images[currentMask]].slice(0);
+					var newFacePos = pos.slice(0);
+					var extInd = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,22,21,20,19];
+					var newp;
+					for (var i = 0;i < 23;i++) {
+						newp = [];
+						newp[0] = (newMaskPos[extInd[i]][0]*1.3) - (newMaskPos[62][0]*0.3);// short for ((newMaskPos[extInd[i]][0]-newMaskPos[62][0])*1.1)+newMaskPos[62][0]
+						newp[1] = (newMaskPos[extInd[i]][1]*1.3) - (newMaskPos[62][1]*0.3);
+						newMaskPos.push(newp);
+						newp = [];
+						newp[0] = (newFacePos[extInd[i]][0]*1.3) - (newFacePos[62][0]*0.3);
+						newp[1] = (newFacePos[extInd[i]][1]*1.3) - (newFacePos[62][1]*0.3);
+						newFacePos.push(newp);
+					}
+					// also need to make new vertices incorporating area outside mask
+					var newVertices = pModel.path.vertices.concat(extended_vertices);
+
+					// deform the mask we want to use to face form
+					fd2.load(imageCanvases[images[currentMask]], newMaskPos, pModel, newVertices);
+					fd2.draw(newFacePos);
+					// and copy onto new canvas
+					newcanvas.getContext('2d').drawImage(document.getElementById('webgl2'),0,0);
+
+					// create masking
+					var tempcoords = positions.slice(0,18);
+					tempcoords.push(positions[21]);
+					tempcoords.push(positions[20]);
+					tempcoords.push(positions[19]);
+					createMasking(maskcanvas, tempcoords);
+
+					/*document.body.appendChild(newcanvas);
+					document.body.appendChild(videocanvas);
+					document.body.appendChild(maskcanvas);
+					debugger;*/
+
+					// do poisson blending
+					Poisson.load(newcanvas, videocanvas, maskcanvas, function() {
+						var result = Poisson.blend(30, 0, 0);
+						// render to canvas
+						newcanvas.getContext('2d').putImageData(result, 0, 0);
+						// get mask
+
+						var maskname = Object.keys(masks)[currentMask];
+						fd.load(newcanvas, pos, pModel);
+						requestAnimFrame(drawMaskLoop);
+					});
+				}
+
+				function drawMaskLoop() {
+					// get position of face
+					positions = ctrack.getCurrentPosition();
+
+					/*for (var i = 0;i < positions.length;i++) {
+						positions[i][1] += 1;
+					}*/
+
+					overlayCC.clearRect(0, 0, 500, 375);
+					if (positions) {
+						// draw mask on top of face
+						fd.draw(positions);
+					}
+					animationRequest = requestAnimFrame(drawMaskLoop);
+				}
+
+				function createMasking(canvas, modelpoints) {
+					// fill canvas with black
+					var cc = canvas.getContext('2d');
+					cc.fillStyle="#000000";
+					cc.fillRect(0, 0, canvas.width, canvas.height);
+					cc.beginPath();
+					cc.moveTo(modelpoints[0][0], modelpoints[0][1]);
+					for (var i = 1;i < modelpoints.length;i++) {
+						cc.lineTo(modelpoints[i][0], modelpoints[i][1]);
+					}
+					cc.lineTo(modelpoints[0][0], modelpoints[0][1]);
+					cc.closePath();
+					cc.fillStyle="#ffffff";
+					cc.fill();
+				}
+
+				/*********** Code for stats **********/
+
+				stats = new Stats();
+				stats.domElement.style.position = 'absolute';
+				stats.domElement.style.top = '0px';
+				document.getElementById('container').appendChild( stats.domElement );
+
+				document.addEventListener("clmtrackrIteration", function(event) {
+					stats.update();
+				}, false);
+
+			</script>
+		</div>
+	</body>
+</html>
